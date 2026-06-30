@@ -98,6 +98,20 @@ class SchedulerTests(unittest.TestCase):
         now_16_05 = __import__("datetime").datetime(2026, 6, 30, 16, 5)
         self.assertTrue(is_due(reminder, now_16_05))
 
+    def test_get_all_dose_times(self):
+        from bot import get_all_dose_times
+        times_12 = get_all_dose_times("09:00", "interval", 12)
+        self.assertEqual(times_12, ["09:00", "21:00"])
+
+        times_8 = get_all_dose_times("02:00", "interval", 8)
+        self.assertEqual(times_8, ["02:00", "10:00", "18:00"])
+
+        times_6 = get_all_dose_times("06:00", "interval", 6)
+        self.assertEqual(times_6, ["00:00", "06:00", "12:00", "18:00"])
+
+        times_daily = get_all_dose_times("08:30", "daily", None)
+        self.assertEqual(times_daily, ["08:30"])
+
 
 if __name__ == "__main__":
     unittest.main()

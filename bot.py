@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 import time
@@ -142,6 +143,41 @@ def delete_keyboard(reminders: List[Dict[str, Any]]) -> Dict:
     return {"inline_keyboard": buttons}
 
 
+def hours_keyboard() -> Dict:
+    buttons = []
+    for r in range(3):
+        row = []
+        for c in range(4):
+            h = r * 4 + c + 1
+            row.append({"text": f"{h}", "callback_data": f"hour:{h}"})
+        buttons.append(row)
+    return {"inline_keyboard": buttons}
+
+
+def minutes_keyboard() -> Dict:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": ":00", "callback_data": "minute:00"},
+                {"text": ":15", "callback_data": "minute:15"},
+                {"text": ":30", "callback_data": "minute:30"},
+                {"text": ":45", "callback_data": "minute:45"},
+            ]
+        ]
+    }
+
+
+def confirm_add_keyboard() -> Dict:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ تأكيد", "callback_data": "confirm_add:yes"},
+                {"text": "❌ إلغاء", "callback_data": "confirm_add:no"},
+            ]
+        ]
+    }
+
+
 def confirm_dose_keyboard(confirmation_id: str) -> Dict:
     return {
         "inline_keyboard": [[
@@ -222,6 +258,20 @@ def display_time(time_24: str) -> str:
     return f"{display_hour:02d}:{minute:02d} {period}"
 
 
+def get_all_dose_times(time_24: str, rule: str, repeat_value: Optional[int]) -> List[str]:
+    if rule == "daily" or not repeat_value or repeat_value <= 0:
+        return [time_24]
+    times = []
+    h, m = map(int, time_24.split(":"))
+    start_dt = datetime.datetime(2000, 1, 1, h, m)
+    num_doses = 24 // repeat_value
+    for i in range(num_doses):
+        dt = start_dt + datetime.timedelta(hours=i * repeat_value)
+        times.append(f"{dt.hour:02d}:{dt.minute:02d}")
+    times.sort()
+    return times
+
+
 def format_reminder(r: Dict[str, Any]) -> str:
     rule = "يومي" if r.get("repeat_rule") == "daily" else f"كل {r.get('repeat_value')} ساعة"
     return f"• <b>{r['medication_name']}</b> — {display_time(r['time'])} ({rule})"
@@ -246,22 +296,10 @@ def handle_text(chat_id: int, text: str) -> None:
     state = USER_STATE.get(chat_id, {})
     step = state.get("step")
 
-    # ─ خطوة 1: اسم الدواء
+    # ─ خطوة 1: اسم الدواء للمستخدم نفسه
     if step == "awaiting_name":
-        USER_STATE[chat_id] = {"step": "awaiting_time", "data": {"name": text}}
-        send_message(chat_id, f"✅ الدواء: <b>{text}</b>\n\nاكتب <b>وقت الجرعة</b> (مثال: <b>8:30</b>):")
-        return
-
-    # ─ خطوة 2: الوقت
-    if step == "awaiting_time":
-        try:
-            time_str = normalize_time(text)
-        except ValueError as exc:
-            send_message(chat_id, str(exc))
-            return
-        USER_STATE[chat_id]["data"]["time_raw"] = time_str
-        USER_STATE[chat_id]["step"] = "awaiting_ampm"
-        send_message(chat_id, f"🕐 الوقت: <b>{text}</b>\n\nصباحاً ولا مساءً؟", reply_markup=ampm_keyboard())
+        USER_STATE[chat_id] = {"step": "awaiting_repeat", "data": {"name": text}}
+        send_message(chat_id, f"✅ الدواء: <b>{text}</b>\n\nاختار نوع التكرار:", reply_markup=repeat_keyboard())
         return
 
     # ─ خطوة: إدخال كود الربط
@@ -280,23 +318,11 @@ def handle_text(chat_id: int, text: str) -> None:
         send_message(patient_id, "✅ تم ربط حساب متابع بحسابك. هيوصله إشعار لو ما أكدتش أخد الدواء.")
         return
 
-    # ─ خطوة: إضافة دواء لمريض (من طرف المتابع) — اسم الدواء
+    # ─ خطوة 1: إضافة دواء لمريض (من طرف المتابع) — اسم الدواء
     if step == "pt_awaiting_name":
         target_id = state["data"]["target_id"]
-        USER_STATE[chat_id] = {"step": "pt_awaiting_time", "data": {"target_id": target_id, "name": text}}
-        send_message(chat_id, f"✅ الدواء: <b>{text}</b>\n\nاكتب <b>وقت الجرعة</b> (مثال: <b>8:30</b>):")
-        return
-
-    # ─ خطوة: إضافة دواء لمريض — الوقت
-    if step == "pt_awaiting_time":
-        try:
-            time_str = normalize_time(text)
-        except ValueError as exc:
-            send_message(chat_id, str(exc))
-            return
-        USER_STATE[chat_id]["data"]["time_raw"] = time_str
-        USER_STATE[chat_id]["step"] = "pt_awaiting_ampm"
-        send_message(chat_id, f"🕐 الوقت: <b>{text}</b>\n\nصباحاً ولا مساءً؟", reply_markup=ampm_keyboard())
+        USER_STATE[chat_id] = {"step": "pt_awaiting_repeat", "data": {"target_id": target_id, "name": text}}
+        send_message(chat_id, f"✅ الدواء: <b>{text}</b>\n\nاختار نوع التكرار:", reply_markup=repeat_keyboard())
         return
 
     # ─ قائمة الأدوية
@@ -355,75 +381,146 @@ def handle_callback(chat_id: int, callback_id: str, data: str, message_id: int) 
 
 def _handle_callback_inner(chat_id: int, data: str, message_id: int) -> None:
 
-    # ─ AM/PM (للمستخدم نفسه)
+    # ─ AM/PM period
     if data.startswith("ampm:"):
         state = USER_STATE.get(chat_id, {})
-        period = data.split(":")[1]
-
-        # flow إضافة دواء للمريض من المتابع
-        if state.get("step") == "pt_awaiting_ampm":
-            time_raw = state["data"]["time_raw"]
-            time_24 = apply_ampm(time_raw, period)
-            USER_STATE[chat_id]["data"]["time"] = time_24
-            USER_STATE[chat_id]["step"] = "pt_awaiting_repeat"
-            edit_message(
-                chat_id, message_id,
-                f"✅ الوقت: <b>{display_time(time_24)}</b>\n\nاختار نوع التكرار:",
-                reply_markup=repeat_keyboard(),
-            )
-            return
-
-        # flow إضافة دواء للمستخدم نفسه
         if state.get("step") != "awaiting_ampm":
             return
-        time_raw = state["data"]["time_raw"]
-        time_24 = apply_ampm(time_raw, period)
-        USER_STATE[chat_id]["data"]["time"] = time_24
-        USER_STATE[chat_id]["step"] = "awaiting_repeat"
+        period = data.split(":")[1]
+        USER_STATE[chat_id]["data"]["period"] = period
+        USER_STATE[chat_id]["step"] = "awaiting_minute"
         edit_message(
             chat_id, message_id,
-            f"✅ الوقت: <b>{display_time(time_24)}</b>\n\nاختار نوع التكرار:",
-            reply_markup=repeat_keyboard(),
+            "🕐 اختار <b>الدقائق</b>:",
+            reply_markup=minutes_keyboard(),
         )
         return
 
     # ─ Repeat rule
     if data.startswith("repeat:"):
         state = USER_STATE.get(chat_id, {})
+        step = state.get("step")
+        if step not in ("awaiting_repeat", "pt_awaiting_repeat"):
+            return
         _, rule, value = data.split(":")
         repeat_value = int(value) if rule == "interval" else None
-        rule_text = "يومي" if rule == "daily" else f"كل {repeat_value} ساعة"
+        
+        # Save rule and value, preserve target_id and name
+        USER_STATE[chat_id]["data"]["rule"] = rule
+        USER_STATE[chat_id]["data"]["repeat_value"] = repeat_value
+        USER_STATE[chat_id]["step"] = "awaiting_hour"
 
-        # flow إضافة دواء للمريض من المتابع
-        if state.get("step") == "pt_awaiting_repeat":
-            med_data = state.get("data", {})
-            target_id = med_data["target_id"]
-            reminder_id = str(uuid.uuid4())
-            STORAGE.add_reminder(reminder_id, target_id, med_data["name"], med_data["time"], rule, repeat_value)
-            USER_STATE.pop(chat_id, None)
-            edit_message(
-                chat_id, message_id,
-                f"✅ <b>تمت الإضافة لحساب المتابَع!</b>\n\n"
-                f"💊 {med_data['name']}\n🕐 {display_time(med_data['time'])}\n🔁 {rule_text}",
-            )
-            send_message(
-                target_id,
-                f"💊 تمت إضافة دواء جديد لك من قِبل المتابع:\n"
-                f"<b>{med_data['name']}</b> — {display_time(med_data['time'])} ({rule_text})",
-            )
-            return
+        # Tip message based on rule
+        tip = ""
+        if rule == "interval":
+            if repeat_value == 6:
+                tip = "\n\n💡 <b>نصيحة:</b> أفضل مواعيد هي: 6 و 12 (صباحاً ومساءً)."
+            elif repeat_value == 8:
+                tip = "\n\n💡 <b>نصيحة:</b> أفضل مواعيد هي: 2 و 10 و 6 صباحاً."
+            elif repeat_value == 12:
+                tip = "\n\n💡 <b>نصيحة:</b> أفضل مواعيد هي: 8 صباحاً و 8 مساءً."
 
-        # flow إضافة دواء للمستخدم نفسه
-        if state.get("step") != "awaiting_repeat":
-            return
-        med_data = state.get("data", {})
-        reminder_id = str(uuid.uuid4())
-        STORAGE.add_reminder(reminder_id, chat_id, med_data["name"], med_data["time"], rule, repeat_value)
-        USER_STATE.pop(chat_id, None)
         edit_message(
             chat_id, message_id,
-            f"✅ <b>تمت الإضافة!</b>\n\n💊 {med_data['name']}\n🕐 {display_time(med_data['time'])}\n🔁 {rule_text}",
+            f"🕐 اختار <b>ساعة الجرعة الأولى</b> (من 1 لـ 12):{tip}",
+            reply_markup=hours_keyboard(),
         )
+        return
+
+    # ─ Hour selection
+    if data.startswith("hour:"):
+        state = USER_STATE.get(chat_id, {})
+        if state.get("step") != "awaiting_hour":
+            return
+        h = int(data.split(":")[1])
+        USER_STATE[chat_id]["data"]["hour"] = h
+        USER_STATE[chat_id]["step"] = "awaiting_ampm"
+        edit_message(
+            chat_id, message_id,
+            "🌅 صباحاً ولا مساءً؟",
+            reply_markup=ampm_keyboard(),
+        )
+        return
+
+    # ─ Minute selection
+    if data.startswith("minute:"):
+        state = USER_STATE.get(chat_id, {})
+        if state.get("step") != "awaiting_minute":
+            return
+        m = data.split(":")[1]
+        med_data = state.get("data", {})
+        time_raw = f"{med_data['hour']}:{m}"
+        time_24 = apply_ampm(time_raw, med_data["period"])
+        USER_STATE[chat_id]["data"]["time"] = time_24
+        USER_STATE[chat_id]["step"] = "awaiting_confirm"
+
+        rule = med_data["rule"]
+        repeat_value = med_data["repeat_value"]
+        rule_text = "يومي" if rule == "daily" else f"كل {repeat_value} ساعة"
+
+        times = get_all_dose_times(time_24, rule, repeat_value)
+        lines = []
+        for idx, t in enumerate(times):
+            lines.append(f"• الجرعة {idx+1}: <b>{display_time(t)}</b>")
+        times_formatted = "\n".join(lines)
+
+        edit_message(
+            chat_id, message_id,
+            f"💊 <b>تأكيد مواعيد الجرعات ({rule_text}):</b>\n\n"
+            f"اسم الدواء: <b>{med_data['name']}</b>\n"
+            f"المواعيد المحددة:\n{times_formatted}\n\n"
+            f"هل تريد تأكيد هذه المواعيد؟",
+            reply_markup=confirm_add_keyboard(),
+        )
+        return
+
+    # ─ Final confirmation of adding medicine
+    if data.startswith("confirm_add:"):
+        state = USER_STATE.get(chat_id, {})
+        if state.get("step") != "awaiting_confirm":
+            return
+        choice = data.split(":")[1]
+        if choice == "yes":
+            med_data = state.get("data", {})
+            target_id = med_data.get("target_id")
+            chat_to_save = target_id if target_id else chat_id
+            
+            rule = med_data["rule"]
+            repeat_value = med_data["repeat_value"]
+            rule_text = "يومي" if rule == "daily" else f"كل {repeat_value} ساعة"
+            reminder_id = str(uuid.uuid4())
+            
+            STORAGE.add_reminder(
+                reminder_id,
+                chat_to_save,
+                med_data["name"],
+                med_data["time"],
+                rule,
+                repeat_value,
+            )
+            USER_STATE.pop(chat_id, None)
+
+            if target_id:
+                # Caregiver flow
+                edit_message(
+                    chat_id, message_id,
+                    f"✅ <b>تمت الإضافة لحساب المتابَع!</b>\n\n"
+                    f"💊 {med_data['name']}\n🕐 {display_time(med_data['time'])}\n🔁 {rule_text}",
+                )
+                send_message(
+                    target_id,
+                    f"💊 تمت إضافة دواء جديد لك من قِبل المتابع:\n"
+                    f"<b>{med_data['name']}</b> — {display_time(med_data['time'])} ({rule_text})",
+                )
+            else:
+                # Patient flow
+                edit_message(
+                    chat_id, message_id,
+                    f"✅ <b>تمت الإضافة!</b>\n\n💊 {med_data['name']}\n🕐 {display_time(med_data['time'])}\n🔁 {rule_text}",
+                )
+        else:
+            USER_STATE.pop(chat_id, None)
+            edit_message(chat_id, message_id, "❌ تم إلغاء إضافة الدواء.")
         return
 
     # ─ Delete medicine
