@@ -3,7 +3,8 @@ import os
 import sqlite3
 from typing import Any, Dict, List, Optional
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "med_reminder.db")
+_DATA_DIR = os.environ.get("DATA_DIR", os.path.dirname(__file__))
+DB_PATH = os.path.join(_DATA_DIR, "med_reminder.db")
 
 
 class ReminderStorage:

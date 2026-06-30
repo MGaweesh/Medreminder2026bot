@@ -107,6 +107,17 @@ def main_menu_keyboard() -> Dict:
     }
 
 
+def ampm_keyboard() -> Dict:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🌅 صباحاً (AM)", "callback_data": "ampm:am"},
+                {"text": "🌙 مساءً (PM)", "callback_data": "ampm:pm"},
+            ]
+        ]
+    }
+
+
 def repeat_keyboard() -> Dict:
     return {
         "inline_keyboard": [
@@ -134,19 +145,40 @@ def delete_keyboard(reminders: List[Dict[str, Any]]) -> Dict:
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
 def normalize_time(value: str) -> str:
-    value = value.strip()
+    """تحويل الوقت المُدخل إلى صيغة HH:MM بنظام 24 ساعة. يقبل 1-12 فقط."""
+    value = value.strip().replace(".", ":")
     if ":" not in value:
-        raise ValueError("❌ صيغة الوقت غلط. اكتب مثلاً: <b>08:30</b>")
+        raise ValueError("❌ صيغة الوقت غلط. اكتب مثلاً: <b>8:30</b> أو <b>11:00</b>")
     h, m = value.split(":", 1)
-    hour, minute = int(h), int(m)
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        raise ValueError("❌ الوقت غير صالح. الساعة بين 00-23 والدقائق بين 00-59")
+    hour, minute = int(h.strip()), int(m.strip())
+    if not (1 <= hour <= 12 and 0 <= minute <= 59):
+        raise ValueError("❌ اكتب الوقت من 1 لـ 12، والدقائق من 00 لـ 59\nمثال: <b>8:30</b> أو <b>11:00</b>")
     return f"{hour:02d}:{minute:02d}"
+
+
+def apply_ampm(time_str: str, period: str) -> str:
+    """تحويل وقت 12h + am/pm إلى 24h."""
+    hour, minute = map(int, time_str.split(":"))
+    if period == "am":
+        if hour == 12:
+            hour = 0
+    else:  # pm
+        if hour != 12:
+            hour += 12
+    return f"{hour:02d}:{minute:02d}"
+
+
+def display_time(time_24: str) -> str:
+    """تحويل وقت 24h لعرضه بصيغة 12h مع صباحاً/مساءً."""
+    hour, minute = map(int, time_24.split(":"))
+    period = "🌅 صباحاً" if hour < 12 else "🌙 مساءً"
+    display_hour = hour % 12 or 12
+    return f"{display_hour:02d}:{minute:02d} {period}"
 
 
 def format_reminder(r: Dict[str, Any]) -> str:
     rule = "يومي" if r.get("repeat_rule") == "daily" else f"كل {r.get('repeat_value')} ساعة"
-    return f"• <b>{r['medication_name']}</b> — {r['time']} ({rule})"
+    return f"• <b>{r['medication_name']}</b> — {display_time(r['time'])} ({rule})"
 
 
 # ─── Flow handlers ─────────────────────────────────────────────────────────────
@@ -173,12 +205,12 @@ def handle_text(chat_id: int, text: str) -> None:
         except ValueError as exc:
             send_message(chat_id, str(exc))
             return
-        USER_STATE[chat_id]["data"]["time"] = time_str
-        USER_STATE[chat_id]["step"] = "awaiting_repeat"
+        USER_STATE[chat_id]["data"]["time_raw"] = time_str
+        USER_STATE[chat_id]["step"] = "awaiting_ampm"
         send_message(
             chat_id,
-            f"✅ الوقت: <b>{time_str}</b>\n\nاختار نوع التكرار:",
-            reply_markup=repeat_keyboard(),
+            f"🕐 الوقت: <b>{text}</b>\n\nصباحاً ولا مساءً؟",
+            reply_markup=ampm_keyboard(),
         )
         return
 
@@ -213,6 +245,23 @@ def handle_text(chat_id: int, text: str) -> None:
 def handle_callback(chat_id: int, callback_id: str, data: str, message_id: int) -> None:
     answer_callback(callback_id)
 
+    # ─ اختيار صباح/مساء
+    if data.startswith("ampm:"):
+        state = USER_STATE.get(chat_id, {})
+        if state.get("step") != "awaiting_ampm":
+            return
+        period = data.split(":")[1]  # "am" or "pm"
+        time_raw = state["data"]["time_raw"]
+        time_24 = apply_ampm(time_raw, period)
+        USER_STATE[chat_id]["data"]["time"] = time_24
+        USER_STATE[chat_id]["step"] = "awaiting_repeat"
+        edit_message(
+            chat_id, message_id,
+            f"✅ الوقت: <b>{display_time(time_24)}</b>\n\nاختار نوع التكرار:",
+            reply_markup=repeat_keyboard(),
+        )
+        return
+
     # ─ اختيار التكرار
     if data.startswith("repeat:"):
         state = USER_STATE.get(chat_id, {})
@@ -227,7 +276,7 @@ def handle_callback(chat_id: int, callback_id: str, data: str, message_id: int) 
         rule_text = "يومي" if rule == "daily" else f"كل {repeat_value} ساعة"
         edit_message(
             chat_id, message_id,
-            f"✅ <b>تمت الإضافة!</b>\n\n💊 {med_data['name']}\n🕐 {med_data['time']}\n🔁 {rule_text}",
+            f"✅ <b>تمت الإضافة!</b>\n\n💊 {med_data['name']}\n🕐 {display_time(med_data['time'])}\n🔁 {rule_text}",
         )
         return
 
