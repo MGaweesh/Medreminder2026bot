@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.env
+
+# SQLite database
+med_reminder.db
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
