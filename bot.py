@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,12 +32,29 @@ def get_updates(offset: Optional[int] = None) -> List[Dict[str, Any]]:
     params: Dict[str, Any] = {"timeout": 5}
     if offset is not None:
         params["offset"] = offset
-    payload = telegram_request("getUpdates", params)
-    return payload.get("result", [])
+
+    for attempt in range(2):
+        try:
+            payload = telegram_request("getUpdates", params)
+            return payload.get("result", [])
+        except RuntimeError as exc:
+            if "Conflict" in str(exc) and attempt == 0:
+                print("Conflict detected، أحاول حذف webhook ثم إعادة المحاولة...")
+                delete_webhook()
+                time.sleep(1)
+                continue
+            raise
+
+    return []
 
 def delete_webhook() -> None:
     try:
         telegram_request("deleteWebhook")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 409:
+            print("Webhook غير مفعّل بالفعل أو تم حذفه.")
+            return
+        raise
     except RuntimeError as exc:
         print(f"تحذير: {exc}")
     except Exception as exc:
