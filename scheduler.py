@@ -1,9 +1,22 @@
 import datetime
+import os
 import time
 from typing import Dict, List
 
 from storage import ReminderStorage
 from bot import send_message
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+
+_TZ_NAME = os.environ.get("TZ", "Africa/Cairo")
+
+
+def _now() -> datetime.datetime:
+    """الوقت الحالي بتوقيت المستخدم (من TZ env var)."""
+    return datetime.datetime.now(tz=ZoneInfo(_TZ_NAME)).replace(tzinfo=None)
 
 
 def parse_time_string(time_str: str) -> datetime.time:
@@ -57,7 +70,7 @@ class ReminderScheduler:
         self.interval_seconds = interval_seconds
 
     def run_once(self) -> None:
-        now = datetime.datetime.now()
+        now = _now()
         reminders = self.storage.list_all_active()
         for reminder in reminders:
             if is_due(reminder, now):
