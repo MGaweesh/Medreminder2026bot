@@ -15,7 +15,7 @@ API_URL = f"https://api.telegram.org/bot{TOKEN}" if TOKEN else None
 STORAGE = ReminderStorage()
 
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "Mgaweesh")
-ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "5420935767")
 
 # حالة المحادثة لكل مستخدم
 USER_STATE: Dict[int, Dict[str, Any]] = {}
