@@ -1,8 +1,9 @@
 import os
 import sys
+import time
 import threading
 
-from bot import delete_webhook, run_bot
+from bot import delete_webhook, kick_other_instances, run_bot
 from scheduler import ReminderScheduler
 from storage import ReminderStorage
 
@@ -28,6 +29,8 @@ def main() -> None:
         acquire_lock()
 
     delete_webhook()
+    kick_other_instances()
+    time.sleep(3)
     storage = ReminderStorage()
     scheduler = ReminderScheduler(storage, interval_seconds=30)
 

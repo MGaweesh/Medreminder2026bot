@@ -56,7 +56,7 @@ def get_updates(offset: Optional[int] = None) -> List[Dict[str, Any]]:
 def delete_webhook() -> None:
     """حذف أي webhook نشط ومسح الـ updates المعلقة لتجنب تعارض polling."""
     try:
-        telegram_request("deleteWebhook", {"drop_pending_updates": True})
+        telegram_request("deleteWebhook", {"drop_pending_updates": True}, timeout=10)
         print("تم حذف webhook ومسح الـ updates المعلقة.")
     except urllib.error.HTTPError as exc:
         if exc.code == 409:
@@ -67,6 +67,18 @@ def delete_webhook() -> None:
         print(f"تحذير: {exc}")
     except Exception as exc:
         print(f"فشل حذف webhook: {exc}")
+
+
+def kick_other_instances() -> None:
+    """إرسال getUpdates بـ timeout=0 لإيقاف أي instance آخر يعمل polling."""
+    print("جارٍ إيقاف أي instances أخرى...")
+    for _ in range(3):
+        try:
+            telegram_request("getUpdates", {"timeout": 0, "limit": 1}, timeout=10)
+            time.sleep(2)
+        except Exception:
+            time.sleep(2)
+    print("تم. بدء polling الآن.")
 
 
 def send_message(chat_id: int, text: str) -> None:
