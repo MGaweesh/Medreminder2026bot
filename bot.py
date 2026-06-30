@@ -1,5 +1,6 @@
 import os
 import json
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -17,8 +18,13 @@ def telegram_request(method: str, params: Optional[Dict[str, Any]] = None) -> Di
         raise RuntimeError("لم يتم تعيين TELEGRAM_TOKEN. عيّن متغير البيئة ثم أعد التشغيل.")
     body = urllib.parse.urlencode(params or {}).encode("utf-8")
     request = urllib.request.Request(f"{API_URL}/{method}", data=body, method="POST")
-    with urllib.request.urlopen(request, timeout=10) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 409:
+            raise RuntimeError("Conflict: يبدو أنه تم تفعيل webhook للبوت. تأكد من تعطيل webhook قبل استخدام polling.") from exc
+        raise
 
 
 def get_updates(offset: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -27,6 +33,14 @@ def get_updates(offset: Optional[int] = None) -> List[Dict[str, Any]]:
         params["offset"] = offset
     payload = telegram_request("getUpdates", params)
     return payload.get("result", [])
+
+def delete_webhook() -> None:
+    try:
+        telegram_request("deleteWebhook")
+    except RuntimeError as exc:
+        print(f"تحذير: {exc}")
+    except Exception as exc:
+        print(f"فشل حذف webhook: {exc}")
 
 
 def send_message(chat_id: int, text: str) -> None:

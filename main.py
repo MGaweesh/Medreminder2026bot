@@ -1,11 +1,12 @@
 import threading
 
-from bot import run_bot
+from bot import delete_webhook, run_bot
 from scheduler import ReminderScheduler
 from storage import ReminderStorage
 
 
 def main() -> None:
+    delete_webhook()
     storage = ReminderStorage()
     scheduler = ReminderScheduler(storage, interval_seconds=30)
 
