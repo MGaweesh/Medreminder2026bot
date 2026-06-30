@@ -38,6 +38,31 @@ class ReminderStorageTests(unittest.TestCase):
             ReminderStorage(db_path=db_path)
             self.assertTrue(os.path.exists(db_path))
 
+    def test_get_stats(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "med_reminder.db")
+            storage = ReminderStorage(db_path=db_path)
+            
+            # Initial stats should be all zeros
+            stats = storage.get_stats()
+            self.assertEqual(stats["active_patients"], 0)
+            self.assertEqual(stats["active_caregivers"], 0)
+            self.assertEqual(stats["total_reminders"], 0)
+            self.assertEqual(stats["total_users"], 0)
+            
+            # Add reminder
+            storage.add_reminder("r1", 111, "MedA", "08:00")
+            stats = storage.get_stats()
+            self.assertEqual(stats["active_patients"], 1)
+            self.assertEqual(stats["total_reminders"], 1)
+            self.assertEqual(stats["total_users"], 1)
+            
+            # Link account
+            storage.link_accounts(111, 222)
+            stats = storage.get_stats()
+            self.assertEqual(stats["active_caregivers"], 1)
+            self.assertEqual(stats["total_users"], 2)
+
 
 class SchedulerTests(unittest.TestCase):
     def test_parse_time_string(self):

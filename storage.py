@@ -318,3 +318,39 @@ class ReminderStorage:
         finally:
             conn.close()
         return row["chat_id"]
+
+    def get_stats(self) -> Dict[str, int]:
+        conn = self._connect()
+        try:
+            active_patients = conn.execute(
+                "SELECT COUNT(DISTINCT chat_id) FROM reminders WHERE active = 1"
+            ).fetchone()[0] or 0
+            
+            active_caregivers = conn.execute(
+                "SELECT COUNT(DISTINCT caregiver_chat_id) FROM linked_accounts"
+            ).fetchone()[0] or 0
+            
+            total_reminders = conn.execute(
+                "SELECT COUNT(*) FROM reminders WHERE active = 1"
+            ).fetchone()[0] or 0
+            
+            total_users = conn.execute(
+                """
+                SELECT COUNT(DISTINCT chat_id) FROM (
+                    SELECT chat_id FROM reminders
+                    UNION
+                    SELECT patient_chat_id FROM linked_accounts
+                    UNION
+                    SELECT caregiver_chat_id FROM linked_accounts
+                )
+                """
+            ).fetchone()[0] or 0
+        finally:
+            conn.close()
+            
+        return {
+            "active_patients": active_patients,
+            "active_caregivers": active_caregivers,
+            "total_reminders": total_reminders,
+            "total_users": total_users
+        }

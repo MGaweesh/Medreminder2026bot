@@ -14,6 +14,9 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN") or os.environ.get("BOT_TOKEN") or ""
 API_URL = f"https://api.telegram.org/bot{TOKEN}" if TOKEN else None
 STORAGE = ReminderStorage()
 
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "Mgaweesh")
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
+
 # حالة المحادثة لكل مستخدم
 USER_STATE: Dict[int, Dict[str, Any]] = {}
 
@@ -292,9 +295,33 @@ def show_caregiver_menu(chat_id: int) -> None:
 
 # ─── Text Handler ──────────────────────────────────────────────────────────────
 
-def handle_text(chat_id: int, text: str) -> None:
+def handle_text(chat_id: int, text: str, message: Dict[str, Any]) -> None:
     state = USER_STATE.get(chat_id, {})
     step = state.get("step")
+
+    # ─ أمر الإحصائيات (للمدير فقط)
+    if text == "/stats":
+        sender = message.get("from", {})
+        username = sender.get("username")
+        sender_id = sender.get("id")
+        
+        is_admin = False
+        if ADMIN_CHAT_ID and str(sender_id) == str(ADMIN_CHAT_ID):
+            is_admin = True
+        elif username and username.lower() == ADMIN_USERNAME.lower():
+            is_admin = True
+            
+        if is_admin:
+            stats = STORAGE.get_stats()
+            msg = (
+                "📊 <b>إحصائيات البوت للمدير:</b>\n\n"
+                f"👥 <b>إجمالي المستخدمين الفريدين:</b> {stats['total_users']}\n"
+                f"💊 <b>عدد المرضى النشطين:</b> {stats['active_patients']}\n"
+                f"👥 <b>عدد المتابعين النشطين:</b> {stats['active_caregivers']}\n"
+                f"⏰ <b>إجمالي التذكيرات النشطة:</b> {stats['total_reminders']}\n"
+            )
+            send_message(chat_id, msg)
+            return
 
     # ─ خطوة 1: اسم الدواء للمستخدم نفسه
     if step == "awaiting_name":
@@ -751,7 +778,7 @@ def handle_update(update: Dict[str, Any]) -> None:
     text = message.get("text", "").strip()
     if not chat_id or not text:
         return
-    handle_text(chat_id, text)
+    handle_text(chat_id, text, message)
 
 
 # ─── Bot loop ───────────────────────────────────────────────────────────────────
