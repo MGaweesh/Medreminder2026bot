@@ -14,42 +14,50 @@ API_URL = f"https://api.telegram.org/bot{TOKEN}" if TOKEN else None
 STORAGE = ReminderStorage()
 
 
-def telegram_request(method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def telegram_request(method: str, params: Optional[Dict[str, Any]] = None, timeout: int = 35) -> Dict[str, Any]:
     if not API_URL:
         raise RuntimeError("لم يتم تعيين TELEGRAM_TOKEN. عيّن متغير البيئة ثم أعد التشغيل.")
     body = urllib.parse.urlencode(params or {}).encode("utf-8")
     request = urllib.request.Request(f"{API_URL}/{method}", data=body, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 409:
-            raise RuntimeError("Conflict: يبدو أنه تم تفعيل webhook للبوت. تأكد من تعطيل webhook قبل استخدام polling.") from exc
+            raise RuntimeError("Conflict: terminated by other getUpdates request; make sure that only one bot instance is running") from exc
         raise
 
 
 def get_updates(offset: Optional[int] = None) -> List[Dict[str, Any]]:
-    params: Dict[str, Any] = {"timeout": 5}
+    params: Dict[str, Any] = {"timeout": 30, "allowed_updates": ["message"]}
     if offset is not None:
         params["offset"] = offset
 
-    for attempt in range(2):
+    for attempt in range(3):
         try:
-            payload = telegram_request("getUpdates", params)
+            # timeout=35 يتجاوز الـ 30s long-polling timeout بهامش 5 ثواني
+            payload = telegram_request("getUpdates", params, timeout=35)
             return payload.get("result", [])
         except RuntimeError as exc:
-            if "Conflict" in str(exc) and attempt == 0:
-                print("Conflict detected، أحاول حذف webhook ثم إعادة المحاولة...")
+            if "Conflict" in str(exc):
+                wait = 5 * (attempt + 1)
+                print(f"Conflict detected (محاولة {attempt + 1})، أحاول حذف webhook وانتظر {wait}s...")
                 delete_webhook()
-                time.sleep(1)
+                time.sleep(wait)
                 continue
             raise
+        except Exception as exc:
+            print(f"خطأ في getUpdates: {exc}")
+            time.sleep(3)
+            continue
 
     return []
 
 def delete_webhook() -> None:
+    """حذف أي webhook نشط ومسح الـ updates المعلقة لتجنب تعارض polling."""
     try:
-        telegram_request("deleteWebhook")
+        telegram_request("deleteWebhook", {"drop_pending_updates": True})
+        print("تم حذف webhook ومسح الـ updates المعلقة.")
     except urllib.error.HTTPError as exc:
         if exc.code == 409:
             print("Webhook غير مفعّل بالفعل أو تم حذفه.")
@@ -197,9 +205,22 @@ def run_bot() -> None:
     print("البوت يعمل الآن...")
     offset: Optional[int] = None
     while True:
-        updates = get_updates(offset=offset)
-        for update in updates:
-            update_id = update.get("update_id")
-            if update_id is not None:
-                offset = update_id + 1
-            handle_update(update)
+        try:
+            updates = get_updates(offset=offset)
+            for update in updates:
+                update_id = update.get("update_id")
+                if update_id is not None:
+                    offset = update_id + 1
+                try:
+                    handle_update(update)
+                except Exception as exc:
+                    print(f"خطأ في معالجة update: {exc}")
+        except RuntimeError as exc:
+            if "Conflict" in str(exc):
+                print(f"خطأ تعارض حرج: {exc}. إيقاف البوت.")
+                raise
+            print(f"خطأ في polling: {exc}")
+            time.sleep(5)
+        except Exception as exc:
+            print(f"خطأ غير متوقع في polling: {exc}")
+            time.sleep(5)
