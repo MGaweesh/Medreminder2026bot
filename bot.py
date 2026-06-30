@@ -155,10 +155,33 @@ def caregiver_menu_keyboard() -> Dict:
         "inline_keyboard": [
             [{"text": "🔗 مشاركة كودي (لشخص يتابعني)", "callback_data": "cg:share"}],
             [{"text": "👁 ربط بشخص أتابعه", "callback_data": "cg:link"}],
-            [{"text": "📊 عرض المتابَعين", "callback_data": "cg:patients"}],
+            [{"text": "📊 إدارة المتابَعين", "callback_data": "cg:patients"}],
             [{"text": "🔓 إلغاء ربط", "callback_data": "cg:unlink"}],
         ]
     }
+
+
+def manage_patient_keyboard(patient_id: int) -> Dict:
+    """قائمة إدارة مريض معين من طرف المتابع."""
+    pid = str(patient_id)
+    return {
+        "inline_keyboard": [
+            [{"text": "📋 عرض أدويته", "callback_data": f"pt:list:{pid}"}],
+            [{"text": "➕ إضافة دواء له", "callback_data": f"pt:add:{pid}"}],
+            [{"text": "🗑 حذف دواء له", "callback_data": f"pt:del:{pid}"}],
+            [{"text": "🔔 تذكير يدوي الآن", "callback_data": f"pt:remind:{pid}"}],
+            [{"text": "↩️ رجوع", "callback_data": "cg:patients"}],
+        ]
+    }
+
+
+def delete_patient_med_keyboard(reminders: List[Dict[str, Any]], patient_id: int) -> Dict:
+    buttons = []
+    for r in reminders:
+        label = f"❌ {r['medication_name']} — {display_time(r['time'])}"
+        buttons.append([{"text": label, "callback_data": f"pt:delmed:{patient_id}:{r['id']}"}])
+    buttons.append([{"text": "↩️ رجوع", "callback_data": f"pt:back:{patient_id}"}])
+    return {"inline_keyboard": buttons}
 
 
 def unlink_keyboard(patients: List[Dict[str, Any]]) -> Dict:
@@ -257,6 +280,25 @@ def handle_text(chat_id: int, text: str) -> None:
         send_message(patient_id, "✅ تم ربط حساب متابع بحسابك. هيوصله إشعار لو ما أكدتش أخد الدواء.")
         return
 
+    # ─ خطوة: إضافة دواء لمريض (من طرف المتابع) — اسم الدواء
+    if step == "pt_awaiting_name":
+        target_id = state["data"]["target_id"]
+        USER_STATE[chat_id] = {"step": "pt_awaiting_time", "data": {"target_id": target_id, "name": text}}
+        send_message(chat_id, f"✅ الدواء: <b>{text}</b>\n\nاكتب <b>وقت الجرعة</b> (مثال: <b>8:30</b>):")
+        return
+
+    # ─ خطوة: إضافة دواء لمريض — الوقت
+    if step == "pt_awaiting_time":
+        try:
+            time_str = normalize_time(text)
+        except ValueError as exc:
+            send_message(chat_id, str(exc))
+            return
+        USER_STATE[chat_id]["data"]["time_raw"] = time_str
+        USER_STATE[chat_id]["step"] = "pt_awaiting_ampm"
+        send_message(chat_id, f"🕐 الوقت: <b>{text}</b>\n\nصباحاً ولا مساءً؟", reply_markup=ampm_keyboard())
+        return
+
     # ─ قائمة الأدوية
     if text in ("📋 أدويتي", "/list"):
         show_list(chat_id)
@@ -289,17 +331,51 @@ def handle_text(chat_id: int, text: str) -> None:
     send_message(chat_id, "استخدم الأزرار 👇", reply_markup=main_menu_keyboard())
 
 
+# ─── Caregiver Authorization ──────────────────────────────────────────────────
+
+def _assert_caregiver(caregiver_id: int, patient_id: int) -> None:
+    """يتحقق إن الـ caregiver مرتبط فعلاً بالمريض، لو لأ يرفع exception."""
+    patients = STORAGE.get_patients(caregiver_id)
+    ids = [p["patient_chat_id"] for p in patients]
+    if patient_id not in ids:
+        raise PermissionError("غير مصرح")
+
+
 # ─── Callback Handler ──────────────────────────────────────────────────────────
 
 def handle_callback(chat_id: int, callback_id: str, data: str, message_id: int) -> None:
     answer_callback(callback_id)
+    try:
+        _handle_callback_inner(chat_id, data, message_id)
+    except PermissionError:
+        send_message(chat_id, "⛔ غير مصرح لك بهذا الإجراء.")
+    except Exception as exc:
+        print(f"callback error: {exc}")
 
-    # ─ AM/PM
+
+def _handle_callback_inner(chat_id: int, data: str, message_id: int) -> None:
+
+    # ─ AM/PM (للمستخدم نفسه)
     if data.startswith("ampm:"):
         state = USER_STATE.get(chat_id, {})
+        period = data.split(":")[1]
+
+        # flow إضافة دواء للمريض من المتابع
+        if state.get("step") == "pt_awaiting_ampm":
+            time_raw = state["data"]["time_raw"]
+            time_24 = apply_ampm(time_raw, period)
+            USER_STATE[chat_id]["data"]["time"] = time_24
+            USER_STATE[chat_id]["step"] = "pt_awaiting_repeat"
+            edit_message(
+                chat_id, message_id,
+                f"✅ الوقت: <b>{display_time(time_24)}</b>\n\nاختار نوع التكرار:",
+                reply_markup=repeat_keyboard(),
+            )
+            return
+
+        # flow إضافة دواء للمستخدم نفسه
         if state.get("step") != "awaiting_ampm":
             return
-        period = data.split(":")[1]
         time_raw = state["data"]["time_raw"]
         time_24 = apply_ampm(time_raw, period)
         USER_STATE[chat_id]["data"]["time"] = time_24
@@ -314,15 +390,36 @@ def handle_callback(chat_id: int, callback_id: str, data: str, message_id: int) 
     # ─ Repeat rule
     if data.startswith("repeat:"):
         state = USER_STATE.get(chat_id, {})
+        _, rule, value = data.split(":")
+        repeat_value = int(value) if rule == "interval" else None
+        rule_text = "يومي" if rule == "daily" else f"كل {repeat_value} ساعة"
+
+        # flow إضافة دواء للمريض من المتابع
+        if state.get("step") == "pt_awaiting_repeat":
+            med_data = state.get("data", {})
+            target_id = med_data["target_id"]
+            reminder_id = str(uuid.uuid4())
+            STORAGE.add_reminder(reminder_id, target_id, med_data["name"], med_data["time"], rule, repeat_value)
+            USER_STATE.pop(chat_id, None)
+            edit_message(
+                chat_id, message_id,
+                f"✅ <b>تمت الإضافة لحساب المتابَع!</b>\n\n"
+                f"💊 {med_data['name']}\n🕐 {display_time(med_data['time'])}\n🔁 {rule_text}",
+            )
+            send_message(
+                target_id,
+                f"💊 تمت إضافة دواء جديد لك من قِبل المتابع:\n"
+                f"<b>{med_data['name']}</b> — {display_time(med_data['time'])} ({rule_text})",
+            )
+            return
+
+        # flow إضافة دواء للمستخدم نفسه
         if state.get("step") != "awaiting_repeat":
             return
-        _, rule, value = data.split(":")
         med_data = state.get("data", {})
-        repeat_value = int(value) if rule == "interval" else None
         reminder_id = str(uuid.uuid4())
         STORAGE.add_reminder(reminder_id, chat_id, med_data["name"], med_data["time"], rule, repeat_value)
         USER_STATE.pop(chat_id, None)
-        rule_text = "يومي" if rule == "daily" else f"كل {repeat_value} ساعة"
         edit_message(
             chat_id, message_id,
             f"✅ <b>تمت الإضافة!</b>\n\n💊 {med_data['name']}\n🕐 {display_time(med_data['time'])}\n🔁 {rule_text}",
@@ -381,12 +478,125 @@ def handle_callback(chat_id: int, callback_id: str, data: str, message_id: int) 
         if not patients:
             edit_message(chat_id, message_id, "📊 مش بتتابع أي شخص دلوقتي.")
             return
-        lines = []
-        for p in patients:
-            meds = STORAGE.list_reminders(p["patient_chat_id"])
-            med_names = ", ".join(r["medication_name"] for r in meds) or "لا يوجد أدوية"
-            lines.append(f"• ID: <code>{p['patient_chat_id']}</code>\n  أدوية: {med_names}")
-        edit_message(chat_id, message_id, "📊 <b>المتابَعون:</b>\n\n" + "\n\n".join(lines))
+        # لو في مريض واحد روح على قائمة إدارته مباشرة
+        if len(patients) == 1:
+            pid = patients[0]["patient_chat_id"]
+            meds = STORAGE.list_reminders(pid)
+            med_lines = "\n".join(format_reminder(r) for r in meds) or "لا يوجد أدوية بعد."
+            edit_message(
+                chat_id, message_id,
+                f"👤 <b>المتابَع:</b> <code>{pid}</code>\n\n📋 أدويته:\n{med_lines}",
+                reply_markup=manage_patient_keyboard(pid),
+            )
+        else:
+            # لو أكتر من مريض، اعرض قائمة للاختيار
+            buttons = []
+            for p in patients:
+                pid = p["patient_chat_id"]
+                meds = STORAGE.list_reminders(pid)
+                label = f"👤 {pid} — {len(meds)} أدوية"
+                buttons.append([{"text": label, "callback_data": f"pt:open:{pid}"}])
+            edit_message(chat_id, message_id, "اختار الشخص:", reply_markup={"inline_keyboard": buttons})
+        return
+
+    # ─ فتح قائمة إدارة مريض معين
+    if data.startswith("pt:open:"):
+        pid = int(data.split(":")[2])
+        _assert_caregiver(chat_id, pid)
+        meds = STORAGE.list_reminders(pid)
+        med_lines = "\n".join(format_reminder(r) for r in meds) or "لا يوجد أدوية بعد."
+        edit_message(
+            chat_id, message_id,
+            f"👤 <b>المتابَع:</b> <code>{pid}</code>\n\n📋 أدويته:\n{med_lines}",
+            reply_markup=manage_patient_keyboard(pid),
+        )
+        return
+
+    # ─ عرض أدوية المريض
+    if data.startswith("pt:list:"):
+        pid = int(data.split(":")[2])
+        _assert_caregiver(chat_id, pid)
+        meds = STORAGE.list_reminders(pid)
+        med_lines = "\n".join(format_reminder(r) for r in meds) or "لا يوجد أدوية بعد."
+        edit_message(
+            chat_id, message_id,
+            f"📋 <b>أدوية المتابَع:</b>\n\n{med_lines}",
+            reply_markup=manage_patient_keyboard(pid),
+        )
+        return
+
+    # ─ إضافة دواء للمريض
+    if data.startswith("pt:add:"):
+        pid = int(data.split(":")[2])
+        _assert_caregiver(chat_id, pid)
+        USER_STATE[chat_id] = {"step": "pt_awaiting_name", "data": {"target_id": pid}}
+        edit_message(chat_id, message_id, f"💊 اكتب <b>اسم الدواء</b> اللي تريد تضيفه للمتابَع:")
+        return
+
+    # ─ حذف دواء من المريض — عرض القائمة
+    if data.startswith("pt:del:") and data.count(":") == 2:
+        pid = int(data.split(":")[2])
+        _assert_caregiver(chat_id, pid)
+        meds = STORAGE.list_reminders(pid)
+        if not meds:
+            edit_message(chat_id, message_id, "مفيش أدوية للحذف.", reply_markup=manage_patient_keyboard(pid))
+            return
+        edit_message(
+            chat_id, message_id,
+            "اختار الدواء اللي تريد تحذفه:",
+            reply_markup=delete_patient_med_keyboard(meds, pid),
+        )
+        return
+
+    # ─ تنفيذ حذف دواء من المريض
+    if data.startswith("pt:delmed:"):
+        parts = data.split(":")
+        pid = int(parts[2])
+        reminder_id = parts[3]
+        _assert_caregiver(chat_id, pid)
+        deleted = STORAGE.remove_reminder(pid, reminder_id)
+        if deleted:
+            send_message(pid, "🗑 تم حذف أحد أدويتك من قِبل المتابع.")
+        edit_message(
+            chat_id, message_id,
+            "🗑 تم الحذف." if deleted else "❌ مش لاقي الدواء.",
+            reply_markup=manage_patient_keyboard(pid),
+        )
+        return
+
+    # ─ تذكير يدوي فوري للمريض
+    if data.startswith("pt:remind:"):
+        pid = int(data.split(":")[2])
+        _assert_caregiver(chat_id, pid)
+        meds = STORAGE.list_reminders(pid)
+        if not meds:
+            edit_message(chat_id, message_id, "مفيش أدوية مسجلة.", reply_markup=manage_patient_keyboard(pid))
+            return
+        for med in meds:
+            confirmation_id = str(uuid.uuid4())
+            STORAGE.add_pending(confirmation_id, med["id"], pid)
+            send_message(
+                pid,
+                f"🔔 <b>تذكير من المتابع</b>\n\n💊 {med['medication_name']}\n🕐 {display_time(med['time'])}\n\nاضغط بعد ما تاخد الدواء 👇",
+                reply_markup=confirm_dose_keyboard(confirmation_id),
+            )
+        edit_message(
+            chat_id, message_id,
+            f"✅ تم إرسال تذكير يدوي لـ {len(meds)} دواء.",
+            reply_markup=manage_patient_keyboard(pid),
+        )
+        return
+
+    # ─ رجوع لقائمة المريض
+    if data.startswith("pt:back:"):
+        pid = int(data.split(":")[2])
+        meds = STORAGE.list_reminders(pid)
+        med_lines = "\n".join(format_reminder(r) for r in meds) or "لا يوجد أدوية بعد."
+        edit_message(
+            chat_id, message_id,
+            f"👤 <b>المتابَع:</b> <code>{pid}</code>\n\n📋 أدويته:\n{med_lines}",
+            reply_markup=manage_patient_keyboard(pid),
+        )
         return
 
     if data == "cg:unlink":
