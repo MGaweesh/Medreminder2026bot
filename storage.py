@@ -5,6 +5,17 @@ import sqlite3
 import string
 from typing import Any, Dict, List, Optional
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+
+_TZ_NAME = os.environ.get("TZ", "Africa/Cairo")
+
+
+def _now() -> datetime.datetime:
+    return datetime.datetime.now(tz=ZoneInfo(_TZ_NAME)).replace(tzinfo=None)
+
 _DATA_DIR = os.environ.get("DATA_DIR", os.path.dirname(__file__))
 DB_PATH = os.path.join(_DATA_DIR, "med_reminder.db")
 
@@ -88,7 +99,7 @@ class ReminderStorage:
         repeat_rule: str = "daily",
         repeat_value: Optional[int] = None,
     ) -> Dict[str, Any]:
-        created_at = datetime.datetime.now().isoformat(timespec="seconds")
+        created_at = _now().isoformat(timespec="seconds")
         conn = self._connect()
         try:
             conn.execute(
@@ -139,7 +150,7 @@ class ReminderStorage:
         return [dict(row) for row in rows]
 
     def mark_sent(self, reminder_id: str) -> None:
-        sent_at = datetime.datetime.now().isoformat(timespec="seconds")
+        sent_at = _now().isoformat(timespec="seconds")
         conn = self._connect()
         try:
             conn.execute(
@@ -152,7 +163,7 @@ class ReminderStorage:
     # ─── Pending Confirmations ────────────────────────────────────────────────
 
     def add_pending(self, confirmation_id: str, reminder_id: str, chat_id: int) -> None:
-        sent_at = datetime.datetime.now().isoformat(timespec="seconds")
+        sent_at = _now().isoformat(timespec="seconds")
         conn = self._connect()
         try:
             conn.execute(
@@ -166,7 +177,7 @@ class ReminderStorage:
 
     def confirm_pending(self, confirmation_id: str) -> Optional[Dict[str, Any]]:
         """يعلّم الـ confirmation كمؤكد ويرجع بياناته."""
-        confirmed_at = datetime.datetime.now().isoformat(timespec="seconds")
+        confirmed_at = _now().isoformat(timespec="seconds")
         conn = self._connect()
         try:
             conn.execute(
@@ -184,7 +195,7 @@ class ReminderStorage:
     def get_unconfirmed_pending(self, older_than_minutes: int = 30) -> List[Dict[str, Any]]:
         """يرجع التذكيرات اللي اتبعتت ولسه مفيش تأكيد عليها وعدى عليها X دقيقة."""
         cutoff = (
-            datetime.datetime.now() - datetime.timedelta(minutes=older_than_minutes)
+            _now() - datetime.timedelta(minutes=older_than_minutes)
         ).isoformat(timespec="seconds")
         conn = self._connect()
         try:
@@ -215,7 +226,7 @@ class ReminderStorage:
     # ─── Linked Accounts ──────────────────────────────────────────────────────
 
     def link_accounts(self, patient_chat_id: int, caregiver_chat_id: int) -> None:
-        linked_at = datetime.datetime.now().isoformat(timespec="seconds")
+        linked_at = _now().isoformat(timespec="seconds")
         conn = self._connect()
         try:
             conn.execute(
@@ -276,7 +287,7 @@ class ReminderStorage:
             conn.close()
 
         code = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
-        created_at = datetime.datetime.now().isoformat(timespec="seconds")
+        created_at = _now().isoformat(timespec="seconds")
         conn = self._connect()
         try:
             conn.execute(
@@ -292,7 +303,7 @@ class ReminderStorage:
         """يستخدم الكود ويرجع الـ chat_id بتاع المريض، أو None لو الكود غلط/منتهي."""
         # الكود صالح لمدة 10 دقائق
         cutoff = (
-            datetime.datetime.now() - datetime.timedelta(minutes=10)
+            _now() - datetime.timedelta(minutes=10)
         ).isoformat(timespec="seconds")
         conn = self._connect()
         try:

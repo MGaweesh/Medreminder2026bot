@@ -37,8 +37,17 @@ def is_due(reminder: Dict, now: datetime.datetime) -> bool:
 
 def _is_daily_due(reminder: Dict, now: datetime.datetime) -> bool:
     scheduled = parse_time_string(reminder["time"])
-    if now.hour != scheduled.hour or now.minute != scheduled.minute:
+    dt = datetime.datetime.combine(now.date(), scheduled)
+    if now < dt:
         return False
+    created_at_str = reminder.get("created_at")
+    if created_at_str:
+        try:
+            created_at = datetime.datetime.fromisoformat(created_at_str)
+            if created_at > dt:
+                return False
+        except ValueError:
+            pass
     last = reminder.get("last_sent_at")
     today = now.strftime("%Y-%m-%d")
     return not last or not last.startswith(today)
@@ -52,7 +61,15 @@ def _is_interval_due(reminder: Dict, now: datetime.datetime) -> bool:
     if not last:
         scheduled = parse_time_string(reminder["time"])
         dt = datetime.datetime.combine(now.date(), scheduled)
-        return dt <= now < dt + datetime.timedelta(minutes=1)
+        created_at_str = reminder.get("created_at")
+        if created_at_str:
+            try:
+                created_at = datetime.datetime.fromisoformat(created_at_str)
+                while dt < created_at:
+                    dt += datetime.timedelta(hours=repeat_value)
+            except ValueError:
+                pass
+        return now >= dt
     return now >= datetime.datetime.fromisoformat(last) + datetime.timedelta(hours=repeat_value)
 
 

@@ -48,6 +48,29 @@ class SchedulerTests(unittest.TestCase):
         reminder = {"time": "08:30", "repeat_rule": "daily", "last_sent_at": None}
         self.assertTrue(is_due(reminder, now))
 
+    def test_is_due_daily_robust(self):
+        # 1. Past scheduled time but not sent yet today -> should be due
+        now = __import__("datetime").datetime(2026, 6, 30, 8, 35)
+        reminder = {"time": "08:30", "repeat_rule": "daily", "last_sent_at": "2026-06-29T08:30:00"}
+        self.assertTrue(is_due(reminder, now))
+
+        # 2. Past scheduled time but already sent today -> should NOT be due
+        reminder_sent = {"time": "08:30", "repeat_rule": "daily", "last_sent_at": "2026-06-30T08:35:00"}
+        self.assertFalse(is_due(reminder_sent, now))
+
+        # 3. Before scheduled time -> should NOT be due
+        now_before = __import__("datetime").datetime(2026, 6, 30, 8, 25)
+        self.assertFalse(is_due(reminder, now_before))
+
+        # 4. Created after scheduled time today -> should NOT be due today
+        reminder_created_late = {
+            "time": "08:30",
+            "repeat_rule": "daily",
+            "last_sent_at": None,
+            "created_at": "2026-06-30T08:31:00"
+        }
+        self.assertFalse(is_due(reminder_created_late, now))
+
     def test_is_due_interval(self):
         now = __import__("datetime").datetime(2026, 6, 30, 10, 0)
         reminder = {
@@ -57,6 +80,23 @@ class SchedulerTests(unittest.TestCase):
             "last_sent_at": "2026-06-30T08:00:00",
         }
         self.assertTrue(is_due(reminder, now))
+
+    def test_is_due_interval_robust(self):
+        # 1. Created at 10:00 for 08:00 start every 8h. Grid is 08:00, 16:00, 00:00.
+        # At 10:00, it should not trigger (since next is 16:00)
+        reminder = {
+            "time": "08:00",
+            "repeat_rule": "interval",
+            "repeat_value": 8,
+            "last_sent_at": None,
+            "created_at": "2026-06-30T10:00:00"
+        }
+        now_10_05 = __import__("datetime").datetime(2026, 6, 30, 10, 5)
+        self.assertFalse(is_due(reminder, now_10_05))
+
+        # At 16:05 (past 16:00 grid), it should trigger
+        now_16_05 = __import__("datetime").datetime(2026, 6, 30, 16, 5)
+        self.assertTrue(is_due(reminder, now_16_05))
 
 
 if __name__ == "__main__":
